@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import BartTokenizer
+from bert_score import score
 
 from data_utils import tokenize, text_processing
 from data_utils import image_loader, test_img_transforms, img_processing
@@ -24,10 +25,9 @@ def rouge_preprocess(text):
     num_tokens = len(tokens)
     return preprocessed_text
 
-def calc_rouge(generated_reviews, reference_reviews, tokenizer, use_stemmer=False):
+def calc_rouge(generated_reviews, reference_reviews, use_stemmer=False):
     ''' rouge calculation function based on PlanSum [https://github.com/rktamplayo/PlanSum] '''
     rouge_eval = rouge.Rouge(metrics=['rouge-n', 'rouge-l'], max_n=2, limit_length=False, apply_avg=True, apply_best=False, alpha=0.5, stemming=use_stemmer)
-    generated_reviews = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in generated_reviews]
 
     pred_sums = [rouge_preprocess(g) for g in generated_reviews]
     gold_sums = [rouge_preprocess(g) for g in reference_reviews]
@@ -39,6 +39,12 @@ def calc_rouge(generated_reviews, reference_reviews, tokenizer, use_stemmer=Fals
 
     incomplete = [x for x in generated_reviews if not (x.endswith('.') or x.endswith('!'))]
     return {'rouge1' : rouge_1, 'rouge2' : rouge_2, 'rougeL' : rouge_l, 'incomplete': len(incomplete)}
+
+def calc_bert(generated_reviews, reference_reviews):
+    ''' metric described in the paper BERTScore: Evaluating Text Generation with BERT (ICLR 2020) '''
+    _, _, bertF = score(generated_reviews, reference_reviews, lang='en', verbose=False)
+    bertF = bertF.mean().item() * 100
+    return {'bertF' : bertF}
 
 
 class MultimodalTestDataset(Dataset):
@@ -128,7 +134,7 @@ class MultimodalTestDataset(Dataset):
             return (reviews, reviews_mask, reviews_rating, price, rating, brand, name, category, description, img, img_mask)
 
 
-def test(test_dataloader, model):
+def test(test_dataloader, model, tokenizer):
     model.eval()
 
     if args.dataset == 'yelp':
@@ -141,7 +147,7 @@ def test(test_dataloader, model):
 
     generated_list = []
     while reviews is not None:
-        print('%d / %d' % (i, len(test_dataloader)))
+        print('%d / %d' % (i+1, len(test_dataloader)))
 
         with torch.no_grad():
             _, text_hiddens, text_attention_mask, table_hiddens, table_attention_mask, img_hiddens, img_attention_mask = \
@@ -153,6 +159,8 @@ def test(test_dataloader, model):
         generated_list.extend(generated)
         reviews, reviews_mask, reviews_rating, field_value, img, img_mask = prefetcher.next()
         i += 1
+    generated_list = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in generated_list]
+
     return generated_list
 
 
@@ -208,17 +216,20 @@ def main():
 
     # Test
     print ('# Test')
-    generated_list = test(dataloader, model)
+    generated_list = test(dataloader, model, tokenizer)
     summary_list = list(data.df.summary)
 
-    rouge_list = []
+    score_list = []
     for i in range(len(summary_list[0])):
-        rouge_list.append(calc_rouge(generated_list, [x[i] for x in list(data.df.summary)], tokenizer))
+        rouge_score = calc_rouge(generated_list, [x[i] for x in summary_list])
+        bert_score = calc_bert(generated_list, [x[i] for x in summary_list])
+        rouge_score.update(bert_score)
+        score_list.append(rouge_score)
 
-    key_list = ['rouge1', 'rouge2', 'rougeL', 'incomplete']
+    key_list = ['rouge1', 'rouge2', 'rougeL', 'bertF', 'incomplete']
     value_list = []
     for key in key_list:
-        value = np.mean([x[key] for x in rouge_list])
+        value = np.mean([x[key] for x in score_list])
         value_list.append(value)
 
     print('# Results')

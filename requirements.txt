@@ -1,6 +1,7 @@
 Pillow == 8.3.1
 absl_py == 0.13.0
 apex == 0.1
+bert-score-0.3.10
 filelock == 3.0.12
 lorem == 0.1.1
 luigi == 3.0.3
@@ -18,3 +19,4 @@ torch == 1.5.1
 torchvision == 0.6.1
 tqdm == 4.61.2
 transformers == 3.0.2
+
